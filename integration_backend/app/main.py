@@ -343,7 +343,7 @@ def _validate_state(token: Optional[str]) -> bool:
         "Uses environment variables ATLASSIAN_CLIENT_ID and ATLASSIAN_REDIRECT_URI, and a secure state."
     ),
 )
-def atlassian_login(state: Optional[str] = Query(default=None, description="Opaque state for CSRF protection")) -> RedirectResponse | JSONResponse:
+def atlassian_login(state: Optional[str] = Query(default=None, description="Opaque state for CSRF protection")):
     """Initiate Atlassian OAuth 2.0 Authorization Code flow for JIRA.
 
     This constructs the Atlassian authorize URL exactly as specified for JIRA integration:
