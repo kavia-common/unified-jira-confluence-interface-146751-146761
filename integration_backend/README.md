@@ -22,20 +22,20 @@ This is the FastAPI backend for the Unified JIRA-Confluence Interface.
    ```
    pip install -r requirements.txt
    ```
-3. Run the server:
+3. Run the server (default port is 3001):
    ```
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --host 0.0.0.0 --port 3001
    ```
 
 ## Docker
 Build and run:
 ```
 docker build -t integration_backend .
-docker run -p 8000:8000 --env-file .env integration_backend
+docker run -p 3001:3001 --env-file .env integration_backend
 ```
 
 Readiness/Health:
-- Container includes a HEALTHCHECK that polls `http://127.0.0.1:${APP_PORT:-8000}/ready`
+- Container includes a HEALTHCHECK that polls `http://127.0.0.1:${APP_PORT:-3001}/ready`
 - If your platform provides `PORT`, it will be used automatically via `run.sh` (mapped to `APP_PORT`)
 
 CORS notes:

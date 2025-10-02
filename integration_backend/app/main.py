@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if present
+# Note: Server host/port are controlled by run.sh via APP_HOST/APP_PORT (default 3001)
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "Unified JIRA-Confluence Backend")

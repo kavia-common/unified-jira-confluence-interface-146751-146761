@@ -15,7 +15,8 @@ if [ -n "${PORT:-}" ] && [ -z "${APP_PORT:-}" ]; then
 fi
 
 HOST="${APP_HOST:-0.0.0.0}"
-PORT_EFFECTIVE="${APP_PORT:-8000}"
+# Default to 3001 to satisfy orchestrator expectations
+PORT_EFFECTIVE="${APP_PORT:-3001}"
 
 echo "[run.sh] Starting FastAPI on ${HOST}:${PORT_EFFECTIVE}"
 exec uvicorn app.main:app --host "${HOST}" --port "${PORT_EFFECTIVE}"

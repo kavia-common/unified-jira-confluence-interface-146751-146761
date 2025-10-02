@@ -20,12 +20,12 @@ COPY app /app/app
 COPY run.sh /app/run.sh
 RUN chmod +x /app/run.sh
 
-# Expose port
-EXPOSE 8000
+# Expose port 3001 (required by orchestrator/preview)
+EXPOSE 3001
 
-# Add a healthcheck that pings the readiness endpoint
+# Add a healthcheck that pings the readiness endpoint on configured port (default 3001)
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=12 \
-  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${APP_PORT:-8000}/ready || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${APP_PORT:-3001}/ready || exit 1
 
 # Default command to run the app via run.sh (loads .env if present and respects PORT/APP_PORT)
 CMD ["/app/run.sh"]
