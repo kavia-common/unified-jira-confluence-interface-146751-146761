@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import jira_router
+from .routers import jira_router, confluence_router
 
 app = FastAPI(
     title="JIRA-Confluence Integration API",
@@ -9,6 +9,7 @@ app = FastAPI(
 )
 
 app.include_router(jira_router)
+app.include_router(confluence_router)
 
 app.add_middleware(
     CORSMiddleware,
