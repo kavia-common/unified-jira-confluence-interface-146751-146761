@@ -212,6 +212,21 @@ def _validate_state(token: Optional[str]) -> bool:
 def atlassian_login() -> RedirectResponse | JSONResponse:
     """Initiate Atlassian OAuth 2.0 Authorization Code flow.
 
+    Constructs and redirects to the Atlassian authorize URL in the form:
+        https://auth.atlassian.com/authorize
+            ?audience=api.atlassian.com
+            &client_id=${ATLASSIAN_CLIENT_ID}
+            &scope=<space-delimited scopes>
+            &redirect_uri=${ATLASSIAN_REDIRECT_URI}
+            &response_type=code
+            &prompt=consent
+            &state=<generated>
+
+    Notes:
+    - scope is space-delimited (e.g., "offline_access read:jira-user ...") and will be URL-encoded as %20.
+    - state is a short-lived, one-time token used to mitigate CSRF; it is validated on the callback.
+    - client_id and redirect_uri values come from environment variables and must match your Atlassian app settings.
+
     Returns:
         RedirectResponse: Redirects user agent to Atlassian's authorize URL.
         JSONResponse: Error if environment is not configured.
