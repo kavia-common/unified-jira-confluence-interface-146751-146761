@@ -9,7 +9,8 @@ if [ -f ".env" ]; then
   set +a
 fi
 
-# If a platform provides PORT, map it to APP_PORT unless APP_PORT explicitly set
+# If a platform provides PORT, map it to APP_PORT unless APP_PORT explicitly set.
+# Note: Dockerfile HEALTHCHECK also falls back to PORT if APP_PORT is unset.
 if [ -n "${PORT:-}" ] && [ -z "${APP_PORT:-}" ]; then
   export APP_PORT="${PORT}"
 fi

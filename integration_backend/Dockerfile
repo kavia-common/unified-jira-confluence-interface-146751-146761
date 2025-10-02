@@ -26,8 +26,9 @@ EXPOSE 3001
 # Healthcheck: use Python stdlib to avoid missing wget/curl in slim images.
 # Probes the readiness endpoint on configured port (default 3001).
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=12 \
-  CMD python -c "import os,sys,http.client; p=int(os.environ.get('APP_PORT') or 3001); \
-conn=http.client.HTTPConnection('127.0.0.1', p, timeout=3); \
+  CMD python -c "import os,sys,http.client; \
+p = int(os.environ.get('APP_PORT') or os.environ.get('PORT') or 3001); \
+conn = http.client.HTTPConnection('127.0.0.1', p, timeout=3); \
 conn.request('GET','/ready'); r=conn.getresponse(); sys.exit(0 if r.status==200 else 1)" || exit 1
 
 # Default command to run the app via run.sh (loads .env if present and respects PORT/APP_PORT)
