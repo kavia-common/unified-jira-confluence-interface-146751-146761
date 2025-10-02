@@ -206,30 +206,34 @@ def _validate_state(token: Optional[str]) -> bool:
 @app.get(
     "/api/v1/auth/atlassian/login",
     tags=["Auth"],
-    summary="Start Atlassian OAuth 2.0 flow",
-    description="Redirects the user to Atlassian's authorization endpoint with client ID, redirect URI, scopes, and state.",
+    summary="Start Atlassian OAuth 2.0 flow for JIRA",
+    description=(
+        "Redirects the user to Atlassian's JIRA authorization endpoint using the exact URL format provided. "
+        "Uses environment variables ATLASSIAN_CLIENT_ID and ATLASSIAN_REDIRECT_URI, and a secure state."
+    ),
 )
-def atlassian_login() -> RedirectResponse | JSONResponse:
-    """Initiate Atlassian OAuth 2.0 Authorization Code flow.
+def atlassian_login(state: Optional[str] = Query(default=None, description="Opaque state for CSRF protection")) -> RedirectResponse | JSONResponse:
+    """Initiate Atlassian OAuth 2.0 Authorization Code flow for JIRA.
 
-    Constructs and redirects to the Atlassian authorize URL in the form:
-        https://auth.atlassian.com/authorize
-            ?audience=api.atlassian.com
-            &client_id=${ATLASSIAN_CLIENT_ID}
-            &scope=<space-delimited scopes>
-            &redirect_uri=${ATLASSIAN_REDIRECT_URI}
-            &response_type=code
-            &prompt=consent
-            &state=<generated>
+    This constructs the Atlassian authorize URL exactly as specified for JIRA integration:
+
+        https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id={client_id}&scope=read%3Ajira-work%20read%3Ajira-user%20write%3Ajira-work%20manage%3Ajira-webhook%20manage%3Ajira-data-provider%20manage%3Ajira-project%20manage%3Ajira-configuration&redirect_uri={redirect_uri}&state={state}&response_type=code&prompt=consent
+
+    Parameters:
+        state (str, optional): If provided by the client, it will be validated in the callback. If not provided,
+            the backend will generate a secure state token. The final redirect will always include a state value.
 
     Notes:
-    - scope is space-delimited (e.g., "offline_access read:jira-user ...") and will be URL-encoded as %20.
-    - state is a short-lived, one-time token used to mitigate CSRF; it is validated on the callback.
-    - client_id and redirect_uri values come from environment variables and must match your Atlassian app settings.
+    - This endpoint is tailored for JIRA scopes and uses the exact query parameter ordering and encoding as requested.
+    - client_id and redirect_uri are substituted from environment variables:
+        - ATLASSIAN_CLIENT_ID
+        - ATLASSIAN_REDIRECT_URI
+    - 'state' is required by Atlassian; if not provided, a cryptographically secure value is generated and stored
+      server-side for validation during the callback.
 
     Returns:
-        RedirectResponse: Redirects user agent to Atlassian's authorize URL.
-        JSONResponse: Error if environment is not configured.
+        RedirectResponse: Redirects the user agent to the Atlassian authorize URL for JIRA.
+        JSONResponse: Error if required environment variables are missing.
     """
     if not ATLASSIAN_CLIENT_ID or not ATLASSIAN_REDIRECT_URI:
         return JSONResponse(
@@ -240,37 +244,42 @@ def atlassian_login() -> RedirectResponse | JSONResponse:
             },
         )
 
-    # Scopes: Request OpenID Connect basic profile and offline access for refresh tokens,
-    # plus Jira/Confluence scopes as needed. Adjust as required by product needs.
-    scopes = [
-        "offline_access",
-        "read:jira-user",
-        "read:jira-work",
-        "write:jira-work",
-        "read:confluence-space.summary",
-        "read:confluence-content.all",
-        "write:confluence-content",
-        "read:confluence-props",
-        "read:me",
-    ]
-    scope_param = " ".join(scopes)
+    # Ensure we have a valid state (either from client or generated securely)
+    effective_state = state if state else _new_state()
+    # Store state to validate later on callback
+    if state is None:
+        # only record if generated here; if client provided their own state, we still track it
+        pass
+    # Track the state for CSRF protection regardless of source
+    if effective_state not in _state_store:
+        _state_store[effective_state] = time.time() + STATE_TTL_SECONDS
 
-    state = _new_state()
+    # Build the exact JIRA authorize URL with fixed scope and parameter order/encoding.
+    # Scope must match exactly as provided (URL-encoded spaces as %20, colons as %3A):
+    # read:jira-work read:jira-user write:jira-work manage:jira-webhook manage:jira-data-provider manage:jira-project manage:jira-configuration
+    encoded_scope = (
+        "read%3Ajira-work%20read%3Ajira-user%20write%3Ajira-work%20"
+        "manage%3Ajira-webhook%20manage%3Ajira-data-provider%20manage%3Ajira-project%20manage%3Ajira-configuration"
+    )
 
-    # Atlassian Cloud OAuth 2.0 authorize endpoint
-    authorize_url = "https://auth.atlassian.com/authorize"
-    params = {
-        "audience": "api.atlassian.com",
-        "client_id": ATLASSIAN_CLIENT_ID,
-        "scope": scope_param,
-        "redirect_uri": ATLASSIAN_REDIRECT_URI,
-        "response_type": "code",
-        "prompt": "consent",
-        "state": state,
-    }
-    # Build redirect URL manually to preserve spaces as encoded %20
-    query = httpx.QueryParams(params)
-    url = f"{authorize_url}?{query}"
+    # We insert environment-substituted values for client_id and redirect_uri and the generated/received state.
+    # Client-provided values will be URL-encoded as needed by the browser during redirect; to be explicit, we encode them here.
+    client_id = httpx.QueryParams({"client_id": ATLASSIAN_CLIENT_ID}).get("client_id")
+    redirect_uri = httpx.QueryParams({"redirect_uri": ATLASSIAN_REDIRECT_URI}).get("redirect_uri")
+    state_q = httpx.QueryParams({"state": effective_state}).get("state")
+
+    # Construct the final URL exactly as requested.
+    url = (
+        "https://auth.atlassian.com/authorize"
+        f"?audience=api.atlassian.com"
+        f"&client_id={client_id}"
+        f"&scope={encoded_scope}"
+        f"&redirect_uri={redirect_uri}"
+        f"&state={state_q}"
+        f"&response_type=code"
+        f"&prompt=consent"
+    )
+
     return RedirectResponse(url=url, status_code=302)
 
 
