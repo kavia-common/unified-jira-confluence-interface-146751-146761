@@ -15,11 +15,17 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy application code
+# Copy application code and run script
 COPY app /app/app
+COPY run.sh /app/run.sh
+RUN chmod +x /app/run.sh
 
 # Expose port
 EXPOSE 8000
 
-# Default command to run the app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Add a healthcheck that pings the readiness endpoint
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=12 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${APP_PORT:-8000}/ready || exit 1
+
+# Default command to run the app via run.sh (loads .env if present and respects PORT/APP_PORT)
+CMD ["/app/run.sh"]

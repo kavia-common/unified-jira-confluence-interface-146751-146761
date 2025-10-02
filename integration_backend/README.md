@@ -5,8 +5,9 @@ This is the FastAPI backend for the Unified JIRA-Confluence Interface.
 ## Features
 - Health and readiness endpoints (`/health`, `/ready`)
 - OpenAPI docs at `/docs` and `/openapi.json`
-- CORS configured for local frontend development (`http://localhost:3000`)
+- CORS configured for local frontend development and preview environments (configurable via `CORS_ORIGINS`)
 - Placeholder routes for Auth and Integrations
+- Docker HEALTHCHECK probing `/ready`
 
 ## Requirements
 - Python 3.11+
@@ -32,6 +33,14 @@ Build and run:
 docker build -t integration_backend .
 docker run -p 8000:8000 --env-file .env integration_backend
 ```
+
+Readiness/Health:
+- Container includes a HEALTHCHECK that polls `http://127.0.0.1:${APP_PORT:-8000}/ready`
+- If your platform provides `PORT`, it will be used automatically via `run.sh` (mapped to `APP_PORT`)
+
+CORS notes:
+- By default, `CORS_ORIGINS=*` to ease preview/dependency checks.
+- For stricter environments, set `CORS_ORIGINS` to a comma-separated list of allowed origins.
 
 ## Endpoints
 - `GET /` - Root info

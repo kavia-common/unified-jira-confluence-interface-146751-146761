@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export $(grep -v '^#' .env 2>/dev/null | xargs -r) || true
+# Load .env if present, ignore if missing
+if [ -f ".env" ]; then
+  set -a
+  # shellcheck disable=SC2046
+  export $(grep -v '^#' .env | xargs -r) || true
+  set +a
+fi
+
+# If a platform provides PORT, map it to APP_PORT unless APP_PORT explicitly set
+if [ -n "${PORT:-}" ] && [ -z "${APP_PORT:-}" ]; then
+  export APP_PORT="${PORT}"
+fi
 
 HOST="${APP_HOST:-0.0.0.0}"
-PORT="${APP_PORT:-8000}"
+PORT_EFFECTIVE="${APP_PORT:-8000}"
 
-exec uvicorn app.main:app --host "${HOST}" --port "${PORT}"
+echo "[run.sh] Starting FastAPI on ${HOST}:${PORT_EFFECTIVE}"
+exec uvicorn app.main:app --host "${HOST}" --port "${PORT_EFFECTIVE}"

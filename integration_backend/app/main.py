@@ -15,10 +15,19 @@ APP_ENV = os.getenv("APP_ENV", "development")
 
 # Configure CORS
 cors_origins_env = os.getenv("CORS_ORIGINS", "")
-cors_origins: List[str] = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-if not cors_origins:
-    # Safe default for local dev
-    cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+cors_origins_raw: List[str] = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+# If wildcard requested or not provided, allow "*", which is acceptable for non-credentialed requests.
+# If credentials are required in future, switch to explicit origins.
+allow_all = False
+if not cors_origins_raw:
+    # Default for preview/dev: allow all to avoid origin mismatch during installer checks
+    allow_all = True
+    cors_origins: List[str] = []
+elif len(cors_origins_raw) == 1 and cors_origins_raw[0] == "*":
+    allow_all = True
+    cors_origins = []
+else:
+    cors_origins = cors_origins_raw
 
 openapi_tags = [
     {"name": "Health", "description": "Service health, readiness, and version endpoints."},
@@ -35,13 +44,23 @@ app = FastAPI(
 )
 
 # Apply CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# If allow_all is True, set allow_origins=["*"] and disable credentials for spec compliance.
+if allow_all:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # Models
@@ -85,7 +104,11 @@ def readiness() -> ReadyResponse:
 # PUBLIC_INTERFACE
 @app.get("/", tags=["Docs"], summary="Root", description="Welcome message and quick links to API docs.")
 def root() -> dict:
-    """Root endpoint that provides basic info and links."""
+    """Root endpoint that provides basic info and links.
+
+    Returns:
+        dict: A JSON object with service message, documentation links, health and readiness endpoints, and version.
+    """
     return {
         "message": "Unified JIRA-Confluence Backend",
         "docs": "/docs",
