@@ -6,7 +6,7 @@ This is the FastAPI backend for the Unified JIRA-Confluence Interface.
 - Health and readiness endpoints (`/health`, `/ready`)
 - OpenAPI docs at `/docs` and `/openapi.json`
 - CORS configured for local frontend development and preview environments (configurable via `CORS_ORIGINS`)
-- Placeholder routes for Auth and Integrations
+- Atlassian OAuth 2.0 endpoints for JIRA/Confluence
 - Docker HEALTHCHECK probing `/ready`
 
 ## Requirements
@@ -49,3 +49,39 @@ CORS notes:
 - `GET /api/v1/auth/status` - Auth status placeholder
 - `GET /api/v1/integrations/jira/ping` - JIRA connectivity placeholder
 - `GET /api/v1/integrations/confluence/ping` - Confluence connectivity placeholder
+- `GET /api/v1/auth/atlassian/login` - Redirects to Atlassian's OAuth 2.0 authorization page
+- `GET /api/v1/auth/atlassian/callback` - Handles Atlassian redirect, validates state, exchanges code for tokens
+
+## Atlassian OAuth 2.0
+
+This backend supports Atlassian OAuth 2.0 Authorization Code flow for JIRA and Confluence APIs.
+
+1. Configure environment variables in `.env`:
+   ```
+   ATLASSIAN_CLIENT_ID=your_client_id
+   ATLASSIAN_CLIENT_SECRET=your_client_secret
+   ATLASSIAN_REDIRECT_URI=http://localhost:3001/api/v1/auth/atlassian/callback
+   ```
+   - The redirect URI must match exactly what you configure in the Atlassian Developer Console.
+
+2. Start the flow by visiting:
+   - `http://localhost:3001/api/v1/auth/atlassian/login`
+
+3. After granting consent, Atlassian redirects to the callback:
+   - `GET /api/v1/auth/atlassian/callback?code=...&state=...`
+
+4. The backend validates `state` and exchanges `code` for tokens with Atlassian. The callback returns:
+   - HTML success/error page by default
+   - Or JSON if you pass `?format=json`
+
+Security notes:
+- A short-lived, one-time-use state token is used to protect against CSRF. In production, back this with a user session or a persistent store (e.g., Redis).
+- This sample implementation does not persist tokens. Integrate with your user model and secure storage to save `access_token` and `refresh_token`.
+
+Scopes:
+- The login endpoint requests commonly used scopes for JIRA and Confluence. Adjust scopes to your needs.
+```text
+offline_access read:jira-user read:jira-work write:jira-work
+read:confluence-space.summary read:confluence-content.all write:confluence-content
+read:confluence-props read:me
+```
