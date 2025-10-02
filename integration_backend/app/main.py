@@ -1,13 +1,13 @@
 import os
 import secrets
 import time
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Tuple
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if present
@@ -88,6 +88,59 @@ class ReadyResponse(BaseModel):
     dependencies_ok: bool = Field(..., description="Whether downstream dependencies appear ready.")
 
 
+# --- In-memory demo token store (replace with real user/session store in production) ---
+# For demo purposes only: last exchanged tokens from OAuth callback are stored here.
+# In a real app, associate tokens with authenticated users in a database.
+_token_cache: Dict[str, Any] = {
+    # "access_token": str,
+    # "refresh_token": str,
+    # "expires_at": float (epoch seconds),
+    # "scope": str,
+}
+_site_cache: Dict[str, str] = {
+    # "jira_base": "https://api.atlassian.com/ex/jira/{cloudid}/rest/api/3",
+    # "confluence_base": "https://api.atlassian.com/ex/confluence/{cloudid}/wiki/rest/api"
+}
+
+
+# JIRA models
+class JiraSearchRequest(BaseModel):
+    jql: str = Field(..., description="JQL query to search issues, e.g., project=TEST ORDER BY created DESC")
+    max_results: int = Field(default=25, description="Maximum number of issues to return (1-100).")
+    fields: Optional[List[str]] = Field(default=None, description="Fields to include, e.g., ['summary','status','assignee']")
+
+    @validator("max_results")
+    def _cap_results(cls, v: int) -> int:
+        return max(1, min(100, v))
+
+
+class JiraCreateFields(BaseModel):
+    project_key: str = Field(..., description="Project key, e.g., TEST")
+    summary: str = Field(..., description="Issue summary/title")
+    description: Optional[str] = Field(default=None, description="Issue description")
+    issuetype_name: str = Field(default="Task", description="Issue type name, e.g., Task, Bug")
+
+
+class JiraCreateRequest(BaseModel):
+    fields: JiraCreateFields
+
+
+# Confluence models
+class ConfluencePageResponse(BaseModel):
+    id: str = Field(..., description="Page ID")
+    type: Optional[str] = Field(default=None, description="Content type (page, blogpost)")
+    title: Optional[str] = Field(default=None, description="Page title")
+    version: Optional[int] = Field(default=None, description="Current page version (if available)")
+    spaceKey: Optional[str] = Field(default=None, description="Space key")
+
+
+class ConfluenceUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, description="New page title")
+    body_storage_value: str = Field(..., description="Full page body storage format content (XHTML)")
+    body_storage_representation: str = Field(default="storage", description="Representation, usually 'storage'")
+    version: int = Field(..., description="New version number (current+1)")
+
+
 # PUBLIC_INTERFACE
 @app.get("/health", tags=["Health"], summary="Health check", description="Returns basic health status for liveness probes.", response_model=HealthResponse)
 def health() -> HealthResponse:
@@ -161,6 +214,84 @@ def websocket_docs() -> dict:
         "websocket_supported": False,
         "note": "No WebSocket endpoints are currently implemented. Future versions will document connection info here.",
     }
+
+
+def _get_access_token() -> str:
+    """
+    Retrieve the current access token from the in-memory cache.
+
+    In production, this would come from the authenticated user's stored credentials.
+    """
+    token = _token_cache.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated. Complete OAuth flow first.")
+    return token
+
+
+def _discover_accessible_resources(access_token: str) -> List[Dict[str, Any]]:
+    """Call Atlassian accessible-resources API to list cloud resources for the token."""
+    url = "https://api.atlassian.com/oauth/token/accessible-resources"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    with httpx.Client(timeout=15.0) as client:
+        resp = client.get(url, headers=headers)
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = {"text": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail={"error": "Resource discovery failed", "detail": detail})
+        return resp.json()
+
+
+def _ensure_bases(access_token: str) -> Tuple[str, str]:
+    """
+    Ensure we have JIRA and Confluence base URLs.
+    Precedence: Env vars JIRA_BASE_URL / CONFLUENCE_BASE_URL -> cached -> discover via accessible-resources.
+    Returns (jira_base, confluence_base)
+    """
+    # 1) Env overrides
+    env_jira = os.getenv("JIRA_BASE_URL") or ""
+    env_conf = os.getenv("CONFLUENCE_BASE_URL") or ""
+    jira_base = env_jira
+    conf_base = env_conf
+
+    # 2) Cached
+    if not jira_base and _site_cache.get("jira_base"):
+        jira_base = _site_cache["jira_base"]
+    if not conf_base and _site_cache.get("confluence_base"):
+        conf_base = _site_cache["confluence_base"]
+
+    if jira_base and conf_base:
+        return jira_base, conf_base
+
+    # 3) Discover
+    resources = _discover_accessible_resources(access_token)
+    jira_candidate = None
+    conf_candidate = None
+    for r in resources:
+        # r: {id, name, url, scopes, avatarUrl, resourceType, ...}
+        rtype = r.get("scopes") or []
+        # Build base using cloudid (id)
+        cloudid = r.get("id")
+        # Use resourceType when present otherwise infer from scopes
+        resource_type = r.get("resourceType")
+        if not jira_candidate and (resource_type == "jira" or any("jira" in s for s in rtype)):
+            jira_candidate = f"https://api.atlassian.com/ex/jira/{cloudid}/rest/api/3"
+        if not conf_candidate and (resource_type == "confluence" or any("confluence" in s for s in rtype)):
+            conf_candidate = f"https://api.atlassian.com/ex/confluence/{cloudid}/wiki/rest/api"
+
+    if jira_candidate:
+        _site_cache["jira_base"] = jira_candidate
+        jira_base = jira_candidate
+    if conf_candidate:
+        _site_cache["confluence_base"] = conf_candidate
+        conf_base = conf_candidate
+
+    if not jira_base:
+        raise HTTPException(status_code=400, detail="Unable to determine JIRA base URL. Set JIRA_BASE_URL or ensure token has access.")
+    if not conf_base:
+        raise HTTPException(status_code=400, detail="Unable to determine Confluence base URL. Set CONFLUENCE_BASE_URL or ensure token has access.")
+    return jira_base, conf_base
 
 
 # ============ Atlassian OAuth 2.0 Implementation ============
@@ -353,6 +484,13 @@ def atlassian_callback(
                 )
 
             token_data = resp.json()
+            # Cache tokens in-memory for demo/dev purposes only.
+            # Production: persist securely and associate with authenticated user.
+            _token_cache["access_token"] = token_data.get("access_token")
+            _token_cache["refresh_token"] = token_data.get("refresh_token")
+            _token_cache["scope"] = token_data.get("scope")
+            if token_data.get("expires_in"):
+                _token_cache["expires_at"] = time.time() + float(token_data["expires_in"])
     except httpx.HTTPError as e:
         if format == "json":
             return JSONResponse(status_code=502, content={"error": "Upstream error", "detail": str(e)})
@@ -379,3 +517,158 @@ def atlassian_callback(
             <p>You can close this window and return to the app.</p>
         """,
     )
+
+
+# ===================== Confluence Endpoints =====================
+
+# PUBLIC_INTERFACE
+@app.get(
+    "/api/v1/confluence/pages/{page_id}",
+    tags=["Integrations"],
+    summary="Get Confluence page",
+    description="Fetch a Confluence page by ID with body.storage and version.",
+    response_model=ConfluencePageResponse,
+)
+def confluence_get_page(page_id: str) -> ConfluencePageResponse:
+    """Retrieve a Confluence page by ID, including storage body and version."""
+    access_token = _get_access_token()
+    _, conf_base = _ensure_bases(access_token)
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+
+    params = {"expand": "body.storage,version,space"}
+    url = f"{conf_base}/content/{page_id}"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.get(url, headers=headers, params=params)
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = {"text": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail={"error": "Confluence get page failed", "detail": detail})
+        data = resp.json()
+    return ConfluencePageResponse(
+        id=data.get("id"),
+        type=data.get("type"),
+        title=data.get("title"),
+        version=(data.get("version") or {}).get("number"),
+        spaceKey=((data.get("space") or {}).get("key")),
+    )
+
+
+# PUBLIC_INTERFACE
+@app.put(
+    "/api/v1/confluence/pages/{page_id}",
+    tags=["Integrations"],
+    summary="Update Confluence page (storage)",
+    description="Updates a Confluence page's title and storage body; requires incremented version.",
+)
+def confluence_update_page(page_id: str, payload: ConfluenceUpdateRequest) -> dict:
+    """Update Confluence page with new storage content and title."""
+    access_token = _get_access_token()
+    _, conf_base = _ensure_bases(access_token)
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json", "Content-Type": "application/json"}
+
+    update_payload = {
+        "id": page_id,
+        "type": "page",
+        "title": payload.title or "",  # Confluence requires title; if not provided, will fetch current
+        "version": {"number": payload.version},
+        "body": {
+            "storage": {
+                "value": payload.body_storage_value,
+                "representation": payload.body_storage_representation or "storage",
+            }
+        },
+    }
+
+    # If title not provided, fetch current to preserve
+    if not payload.title:
+        get_url = f"{conf_base}/content/{page_id}"
+        with httpx.Client(timeout=20.0) as client:
+            gres = client.get(get_url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+            if gres.status_code == 200:
+                update_payload["title"] = (gres.json() or {}).get("title") or ""
+            else:
+                update_payload["title"] = ""
+
+    url = f"{conf_base}/content/{page_id}"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.put(url, headers=headers, json=update_payload)
+        if resp.status_code not in (200, 201):
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = {"text": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail={"error": "Confluence update failed", "detail": detail})
+        return resp.json()
+
+
+# ===================== JIRA Endpoints =====================
+
+# PUBLIC_INTERFACE
+@app.post(
+    "/api/v1/jira/issues/search",
+    tags=["Integrations"],
+    summary="Search JIRA issues by JQL",
+    description="Searches JIRA issues using JQL. Requires completing OAuth login first.",
+)
+def jira_search_issues(payload: JiraSearchRequest) -> dict:
+    """Search JIRA issues via JQL.
+
+    Returns minimal fields to keep payload light. Use 'fields' to customize.
+    """
+    access_token = _get_access_token()
+    jira_base, _ = _ensure_bases(access_token)
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json", "Content-Type": "application/json"}
+
+    body: Dict[str, Any] = {"jql": payload.jql, "maxResults": payload.max_results}
+    if payload.fields:
+        body["fields"] = payload.fields
+
+    url = f"{jira_base}/search"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.post(url, headers=headers, json=body)
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = {"text": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail={"error": "JIRA search failed", "detail": detail})
+        data = resp.json()
+    return data
+
+
+# PUBLIC_INTERFACE
+@app.post(
+    "/api/v1/jira/issues",
+    tags=["Integrations"],
+    summary="Create a JIRA issue",
+    description="Creates a new JIRA issue. Requires OAuth.",
+)
+def jira_create_issue(payload: JiraCreateRequest) -> dict:
+    """Create a JIRA issue with minimal required fields."""
+    access_token = _get_access_token()
+    jira_base, _ = _ensure_bases(access_token)
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json", "Content-Type": "application/json"}
+
+    fields = payload.fields
+    create_payload = {
+        "fields": {
+            "project": {"key": fields.project_key},
+            "summary": fields.summary,
+            "issuetype": {"name": fields.issuetype_name},
+        }
+    }
+    if fields.description:
+        create_payload["fields"]["description"] = fields.description
+
+    url = f"{jira_base}/issue"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.post(url, headers=headers, json=create_payload)
+        if resp.status_code not in (200, 201):
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = {"text": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail={"error": "JIRA create failed", "detail": detail})
+        return resp.json()

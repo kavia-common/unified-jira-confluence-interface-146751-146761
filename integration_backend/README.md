@@ -52,6 +52,17 @@ CORS notes:
 - `GET /api/v1/auth/atlassian/login` - Redirects to Atlassian's OAuth 2.0 authorization page (JIRA-specific authorize URL with exact parameters)
 - `GET /api/v1/auth/atlassian/callback` - Handles Atlassian redirect, validates state, exchanges code for tokens
 
+### JIRA
+- `POST /api/v1/jira/issues/search` - Search issues with JQL
+  - Body: `{ "jql": "project=TEST ORDER BY created DESC", "max_results": 25, "fields": ["summary","status"] }`
+- `POST /api/v1/jira/issues` - Create issue
+  - Body: `{ "fields": { "project_key": "TEST", "summary": "Title", "description": "Desc", "issuetype_name": "Task" } }`
+
+### Confluence
+- `GET /api/v1/confluence/pages/{page_id}` - Read a page with body.storage and version
+- `PUT /api/v1/confluence/pages/{page_id}` - Update page content (storage) and title
+  - Body: `{ "title":"Optional", "body_storage_value":"<p>html</p>", "body_storage_representation":"storage", "version": 2 }`
+
 ## Atlassian OAuth 2.0
 
 This backend supports Atlassian OAuth 2.0 Authorization Code flow for JIRA and Confluence APIs.
@@ -119,3 +130,17 @@ Security notes about `state`:
 How to use:
 - Navigate to `http://localhost:3001/api/v1/auth/atlassian/login` to be redirected to Atlassian's consent page for JIRA.
 - After consent, Atlassian redirects to `${ATLASSIAN_REDIRECT_URI}` with `?code=...&state=...`, which the backend processes at `GET /api/v1/auth/atlassian/callback`.
+
+## Environment variables
+See `.env.example` for a complete list. Required for OAuth:
+- `ATLASSIAN_CLIENT_ID`
+- `ATLASSIAN_CLIENT_SECRET`
+- `ATLASSIAN_REDIRECT_URI`
+
+Optional:
+- `JIRA_BASE_URL` and `CONFLUENCE_BASE_URL` (otherwise auto-discovered via accessible-resources)
+- `CORS_ORIGINS`, `APP_PORT`, etc.
+
+## Important notes
+- Tokens are cached in-memory for demo/dev only and are not persisted. In production, implement user authentication and securely store tokens per user with refresh flows.
+- The backend attempts to determine cloud base URLs automatically; set env overrides if discovery isn't suitable for your org.
